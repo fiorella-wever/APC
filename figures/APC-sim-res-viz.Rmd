@@ -1,0 +1,193 @@
+---
+title: "APC viz"
+author: ""
+date: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+```{r libraries, include=FALSE, cache = FALSE}
+
+library(tidyverse)
+library(gsheet)
+theme_set(theme_light())
+
+```
+
+## Loading the data from the google spreadsheet
+
+```{r loading-data}
+
+res_o <- gsheet2tbl('docs.google.com/spreadsheets/d/1jxc96OQUJywNY2-YMmZH78iGkwdsbyZ6_iBun1cJErk')
+
+```
+
+## Some data wrangling/formatting
+
+```{r data-proc}
+
+res <- 
+  res_o %>% 
+  rename(class_imbalance = `class imbalance`)
+
+res <- 
+  res %>% 
+  mutate(
+    class_imbalance =
+      class_imbalance %>% 
+      str_replace("_"," "),
+    class_imbalance = 
+      case_when(
+        str_detect(class_imbalance, "perfectly") ~ 
+          str_c(class_imbalance, " (1:1)"),
+        str_detect(class_imbalance, "slight") ~ 
+          str_c(class_imbalance, " (3:7)"),
+        str_detect(class_imbalance, "severe") ~ 
+          str_c(class_imbalance, " (1:20)"),
+        TRUE ~ class_imbalance
+      ),
+    class_imbalance = 
+      class_imbalance %>% 
+      factor(., levels = unique(class_imbalance))
+  )
+
+res <- 
+  res %>% 
+  mutate(
+    missingness = 
+      missingness %>% 
+      str_sub(., 1, 2) %>% 
+      str_remove("_") %>% 
+      as.integer()
+  )
+
+
+res <- 
+  res %>% 
+  mutate(
+    model = 
+      model %>% 
+      str_replace(" - ", "-") %>% 
+      factor(., levels = c("GRU", "GRU-D", "GRU-APC", "GRUD-APC"))
+  )
+
+# res$class_imbalance %>% levels()
+
+```
+## Selecting the models/methods to display
+
+```{r filtering}
+
+res <- 
+  res %>% 
+  mutate(
+    keep = 
+      ((model %in% c("GRU", "GRU-D")) & (class_imbalance == "perfectly balanced (1:1)")) |
+      ((model %in% c("GRU", "GRU-D")) & (class_imbalance != "perfectly balanced (1:1)") & (method == "class_weights")) |
+      (!(model %in% c("GRU", "GRU-D")) & (method == "finetuned"))
+    )
+
+
+```
+
+## Visualizations
+
+
+```{r model-color}
+
+model_colors <- c("darkgoldenrod1","orangered", "cyan3", "steelblue")
+
+```
+
+
+```{r data-viz, fig.height = 3, fig.width = 9, cache = FALSE}
+
+g_median <- 
+  ggplot(
+  res %>% filter(keep) %>% 
+    group_by(
+      missingness, class_imbalance, model
+    ) %>% 
+    summarize(
+      median_AUPRC = median(prc_auc),
+      min = min(prc_auc),
+      max = max(prc_auc),
+      .groups = "drop"
+    ),
+  aes(x = missingness)
+  ) +
+  geom_ribbon(aes(ymin = min, ymax = max, fill = model), alpha = 0.3) +
+  geom_line(aes(y = median_AUPRC, col = model)) +
+  geom_point(aes(y = median_AUPRC, col = model), size = 0.5) +
+  facet_grid(. ~ class_imbalance) +
+  scale_x_continuous(breaks = c(0,30,60)) +
+  xlab("% of random missingness") +
+  ylab("AUPRC\n(median & extremes)") +
+  scale_color_manual("Model", values = model_colors) +
+  scale_fill_manual("Model", values = model_colors) +
+  theme(strip.text = element_text(face = 2),
+        strip.background = element_rect(fill = "gray50", colour = NA)) 
+  
+g_median
+
+
+ggplot(
+  res %>% filter(keep) %>% 
+    group_by(
+      missingness, class_imbalance, model
+    ) %>% 
+    summarize(
+      mean_AUPRC = mean(prc_auc),
+      sd_min = mean_AUPRC - sd(prc_auc),
+      sd_max = mean_AUPRC + sd(prc_auc),
+      .groups = "drop"
+    ),
+  aes(x = missingness)
+  ) +
+  geom_ribbon(aes(ymin = sd_min, ymax = sd_max, fill = model), alpha = 0.3) +
+  geom_line(aes(y = mean_AUPRC, col = model)) +
+  geom_point(aes(y = mean_AUPRC, col = model)) +
+  facet_grid(. ~ class_imbalance) +
+  scale_x_continuous(breaks = c(0,30,60)) +
+  xlab("% of random missingness") +
+  ylab("AUPRC (mean +- sd)") +
+  scale_color_manual("Model", values = model_colors) +
+  scale_fill_manual("Model", values = model_colors) +
+  theme(strip.text = element_text(face = 2),
+        strip.background = element_rect(fill = "gray50", colour = NA)) 
+
+
+ggplot(
+  res %>% filter(keep),
+  aes(x = missingness,
+      y = prc_auc,
+      col = model,
+      fill = model,
+      group = interaction(missingness, model))
+) +
+  geom_boxplot(alpha = 0.5) +
+  facet_grid(. ~ class_imbalance) +
+  scale_x_continuous(breaks = c(0,30,60)) +
+  xlab("% of random missingness") +
+  ylab("AUPRC") +
+  scale_color_manual("Model", values = model_colors) +
+  scale_fill_manual("Model", values = model_colors) +
+  theme(strip.text = element_text(face = 2),
+        strip.background = element_rect(fill = "gray50", colour = NA)) 
+
+
+
+```
+
+## Export plots
+
+
+```{r viz-export, cache = FALSE}
+
+ggsave(g_median, filename = "sim_data_results.png", width = 16, height = 5, units = "cm", dpi = 300, scale = 1.3)
+
+```
+
