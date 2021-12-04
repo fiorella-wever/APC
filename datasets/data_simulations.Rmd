@@ -1,0 +1,225 @@
+---
+title: "data simulation"
+author: "Laura Symul"
+date: "9/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+source("data_simulation_function.R")
+```
+
+# Simulation parameters
+
+```{r seed-and-simulation-parameters}
+
+
+N_ts <- 400 # number of time-series
+L_ts <- 100 # length of each time-series
+#sigma <- 0.5 # sd of normal noise on simulated input x
+sigma <- 0.2
+```
+
+
+# Simulations
+
+```{r data-simulation}
+
+set.seed(1)
+
+sim_data <- 
+  map_dfr(
+    .x = 1:N_ts,
+    .f = simulate_data,
+    L_ts = L_ts, 
+    sigma = sigma
+  )
+
+```
+
+```{r data-simulation-viz}
+
+ggplot(sim_data %>% filter(ts_id < 10), 
+       aes(x = t, y = var_value, col = y)) +
+  geom_point(size = 0.2) +
+  geom_line(size = 0.1) +
+  facet_grid(y + ts_id ~ input_var) +
+  guides(col = "none")
+
+```
+
+```{r dataset-balance}
+
+ggplot(
+  sim_data %>% 
+    select(ts_id, y) %>% 
+    distinct(),
+  aes(x = y)
+) +
+  geom_bar()
+
+```
+
+
+
+# quick check that the output is not obvious from the average b and x
+
+```{r check-mean-b-and-x}
+
+ggplot(
+  sim_data %>% 
+    group_by(ts_id, input_var, y) %>% 
+    summarize(mean_value = mean(var_value),
+              .groups = "drop"), 
+  aes(x = y, y = mean_value, fill = y)) +
+  geom_violin(draw_quantiles = c(0.25,0.5,0.75)) +
+  facet_grid(input_var ~ ., scales = "free") +
+  guides(fill = "none")
+
+```
+
+
+```{r check-pca}
+
+sim_data_wide <- 
+  sim_data %>% 
+  pivot_wider(
+    names_from = c(input_var, t),
+    values_from = var_value
+  )
+
+pca <- 
+  prcomp(
+    sim_data_wide %>% select(matches("_[0-9]*$"))
+  )
+
+plot(pca)
+
+ggplot(
+  pca$x %>%
+    as_tibble() %>% 
+    mutate(y = sim_data_wide$y),
+  aes(x = PC1, y = PC2, col = y)
+) +
+  geom_point() +
+  coord_fixed()
+
+```
+
+# export long and wide tables
+
+```{r export}
+
+write_csv(sim_data, file = "sim_data.csv")
+write_csv(sim_data_wide, file = "sim_data_wide.csv")
+
+```
+
+
+# glm tests
+
+```{r estimation of the parameters we know are relevant for output}
+
+est_params <- 
+  sim_data %>% 
+  group_by(ts_id, y, input_var, b_prob, x_add_freq, x_offset) %>% 
+  summarize(mean_value = mean(var_value),
+            .groups = "drop") %>% 
+  pivot_wider(
+    names_from = input_var,
+    values_from = mean_value,
+  ) %>% 
+  mutate(x = x-1)
+
+
+get_freq <- 
+  function(x){
+    sp <- spectrum(x, plot = FALSE)
+    sp$freq[sp$spec %>% which.max()]
+  }
+
+
+x_freq_hat <-
+  sim_data %>% 
+  filter(input_var == "x") %>% 
+  mutate(x = var_value) %>% 
+  select(ts_id, x) %>% 
+  group_by(ts_id) %>% 
+  summarize(
+    x_freq = get_freq(x),
+    .groups = "drop"
+  ) 
+
+est_params <- 
+  est_params %>% 
+  left_join(x_freq_hat, by = "ts_id") %>% 
+  mutate(y_num = (y == 1)*1)
+
+```
+
+
+
+```{r}
+
+lm(y_num ~ x_freq, # + b + x, 
+   # family = "binomial", 
+    data = est_params) %>% 
+  summary()
+
+```
+
+
+
+
+
+
+# check that with knowledge of the model, we can estimate the output
+
+Note: this output estimation needs to be adapted anytime the generative model for data simulation is modified.
+
+```{r y-hat}
+
+ggplot(est_output,
+       aes(x = b_prob, y = b)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point()
+
+ggplot(est_output,
+       aes(x = x_offset, y = x)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point()
+
+ggplot(est_output,
+       aes(x = x_add_freq, y = x_freq)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point()
+
+est_output <- 
+  est_output %>% 
+  mutate(
+    y_hat = 
+      # sign(b - 0.5) #*
+      sign(0.5 - x_freq) # *
+      # sign((b-0.5) * (0.5-x))
+  ) %>% 
+  mutate(
+    y_hat = (y_hat > 0) * 1
+  )
+
+ggplot(est_output,
+       aes(x = y, y = y_hat, fill = y)) +
+  geom_violin()
+
+table(est_output %>% select(y, y_hat))
+
+```
+
+It's not too bad. Would be better with a more accurate estimation of the x's frequency.
+
+
+
+
+
+
