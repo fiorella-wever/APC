@@ -1,0 +1,11 @@
+numpy
+scipy
+pandas==1.1.1
+matplotlib
+sklearn
+tqdm
+seaborn
+scikit-learn
+tensorflow==2.2.0
+keras==2.3.0
+keras_layer_normalization
